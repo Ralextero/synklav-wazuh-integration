@@ -19,34 +19,28 @@ WORKER_URL="https://synklav-notification-hub.synklav.workers.dev/"
 
 # SYSTEM MODE SELECTION
 echo "Select execution profile:"
-echo " 1) INITIALIZE : Fresh deployment of Synklav core."
-echo " 2) UPDATE     : Append a new multi-tenant node / user profile."
-echo " 3) PURGE      : Complete atomic removal of all Synklav structures."
-read -p "➔ Enter profile selection (1-3): " EXEC_PROFILE
+echo " 1) INITIALIZE      : Fresh deployment of Synklav core container."
+echo " 2) ADD USER        : Append a new multi-tenant user profile / node UID."
+echo " 3) UPDATE TELEGRAM : Change the minimum alert level for an existing node."
+echo " 4) REMOVE USER     : Delete a single specific user profile cleanly."
+echo " 5) PURGE ALL       : Complete atomic removal of all Synklav structures."
+read -p "➔ Enter profile selection (1-5): " EXEC_PROFILE
 
 # ------------------------------------------------------------------------------
-# PROFILE 3: PURGE OPERATION
+# PROFILE 5: PURGE ALL OPERATIONS
 # ------------------------------------------------------------------------------
-if [ "$EXEC_PROFILE" == "3" ]; then
+if [ "$EXEC_PROFILE" == "5" ]; then
   echo "[WARNING] Initializing complete system purge of Synklav assets..."
-  
-  # Structural backup
   cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
   
-  # Safely wipe any custom-synklav python handlers inside the integration directory
   rm -f /var/ossec/integrations/custom-synklav*
   
-  # Atomic removal of blocks wrapped inside Synklav anchors
   if grep -q "" "$OSSEC_CONF"; then
     sed -i '//,//d' "$OSSEC_CONF"
-    echo "[STATUS] Synklav integration block stripped from ossec.conf cleanly."
-  else
-    echo "[STATUS] No anchor tags found. Scanning for legacy loose integrations..."
-    # Fallback safe individual configuration block deletion line
-    sed -i '/<integration>/,/<\/integration>/{/custom-synklav/d}' "$OSSEC_CONF"
+    echo "[STATUS] Block boundaries stripped from ossec.conf cleanly."
   fi
+  sed -i '/<integration>/{:a;N;/<\/integration>/!ba;/custom-synklav/d}' "$OSSEC_CONF"
   
-  echo "[STATUS] Hot-rebooting Wazuh engine process core..."
   /var/ossec/bin/wazuh-control restart
   echo "===================================================="
   echo " 🔥 PURGE OPERATION COMPLETE: SYSTEM RESTORED CLEANLY"
@@ -55,7 +49,120 @@ if [ "$EXEC_PROFILE" == "3" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# PROFILES 1 & 2: DATA ACQUISITION
+# PROFILE 4: REMOVE SINGLE USER PROFILE (ANTI-ACCUMULATION / REGENERATION)
+# ------------------------------------------------------------------------------
+if [ "$EXEC_PROFILE" == "4" ]; then
+  read -p "➔ Enter the specific NODE UID to remove: " TARGET_UID
+  TARGET_UID=$(echo "$TARGET_UID" | tr -d '[:space:]')
+  
+  if [ -z "$TARGET_UID" ]; then
+    echo "[ERROR] Node UID cannot be empty."
+    exit 1
+  fi
+
+  echo "[STATUS] Initiating targeted removal for node: $TARGET_UID"
+  cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
+
+  # Remove physical python script handler
+  rm -f "/var/ossec/integrations/custom-synklav-${TARGET_UID}"
+
+  # Safe programmatic XML block removal without regex corruption
+  # It reads lines and omits the integration block matching our specific node name
+  python3 -c "
+import os
+conf_path = '$OSSEC_CONF'
+target_name = 'custom-synklav-$TARGET_UID'
+
+with open(conf_path, 'r') as f:
+    lines = f.readlines()
+
+new_lines = []
+inside_target = False
+block_buffer = []
+
+for line in lines:
+    if '<integration>' in line:
+        inside_target = False
+        block_buffer = [line]
+        continue
+    
+    if len(block_buffer) > 0:
+        block_buffer.append(line)
+        if f'<name>{target_name}</name>' in line:
+            inside_target = True
+        if '</integration>' in line:
+            if not inside_target:
+                new_lines.extend(block_buffer)
+            block_buffer = []
+        continue
+        
+    new_lines.append(line)
+
+with open(conf_path, 'w') as f:
+    f.writelines(new_lines)
+"
+  echo "[STATUS] Custom node block matching $TARGET_UID evicted from configuration."
+  /var/ossec/bin/wazuh-control restart
+  exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# PROFILE 3: UPDATE TELEGRAM ALERT LEVEL IN PLACE
+# ------------------------------------------------------------------------------
+if [ "$EXEC_PROFILE" == "3" ]; then
+  read -p "➔ Enter the target NODE UID to update: " TARGET_UID
+  TARGET_UID=$(echo "$TARGET_UID" | tr -d '[:space:]')
+  read -p "➔ Enter the NEW minimum alert level for Telegram (1-15): " NEW_LVL
+  NEW_LVL=$(echo "$NEW_LVL" | tr -d '[:space:]')
+
+  if [ -z "$TARGET_UID" ] || [ -z "$NEW_LVL" ]; then
+    echo "[ERROR] Inputs cannot be null."
+    exit 1
+  fi
+
+  echo "[STATUS] Modifying Telegram alert execution thresholds to level $NEW_LVL..."
+  cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
+
+  # Safe Python XML modifier to target only the specific integration name block
+  python3 -c "
+conf_path = '$OSSEC_CONF'
+target_name = 'custom-synklav-$TARGET_UID'
+new_level = '$NEW_LVL'
+
+with open(conf_path, 'r') as f:
+    content = f.read()
+
+# We isolate our target block and update its level key via inline search
+if f'<name>{target_name}</name>' in content:
+    with open(conf_path, 'r') as f:
+        lines = f.readlines()
+    
+    new_lines = []
+    inside_target = False
+    for line in lines:
+        if '<integration>' in line:
+            inside_target = False
+            block_buffer = [line]
+            new_lines.append(line)
+            continue
+        if 'custom-synklav-' in line and f'{target_name}' in line:
+            inside_target = True
+        if inside_target and '<level>' in line:
+            line = f'    <level>{new_level}</level>\n'
+        new_lines.append(line)
+    
+    with open(conf_path, 'w') as f:
+        f.writelines(new_lines)
+    print('[SUCCESS]')
+else:
+    print('[NOT_FOUND]')
+"
+  /var/ossec/bin/wazuh-control restart
+  exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# PROFILES 1 & 2: DATA ACQUISITION & FRESH DEPLOYMENTS
 # ------------------------------------------------------------------------------
 if [ "$EXEC_PROFILE" != "1" ] && [ "$EXEC_PROFILE" != "2" ]; then
   echo "[ERROR] Invalid selection matrix context."
@@ -65,14 +172,17 @@ fi
 read -p "➔ Enter target UNIQUE NODE UID: " NODE_UID
 NODE_UID=$(echo "$NODE_UID" | tr -d '[:space:]')
 
-read -p "➔ Enter 24-word Recovery Kit (single space-separated line): " RECOVERY_KIT
+read -p "➔ Enter your 24-word Recovery Kit (single line): " RECOVERY_KIT
 RECOVERY_KIT=$(echo "$RECOVERY_KIT" | tr -s ' ' | tr '[:upper:]' '[:lower:]')
 
 WORD_COUNT=$(echo "$RECOVERY_KIT" | wc -w)
 if [ "$WORD_COUNT" -ne 24 ]; then
-  echo "[ERROR] Cryptographic validation failure: Mnemonic matrix must equal 24 elements. Detected: $WORD_COUNT"
+  echo "[ERROR] Cryptographic validation failure: Mnemonic matrix must equal 24 elements."
   exit 1
 fi
+
+read -p "➔ Enter the MINIMUM alert level for Telegram/Push routing (1-15): " MIN_ALERT_LEVEL
+MIN_ALERT_LEVEL=$(echo "$MIN_ALERT_LEVEL" | tr -d '[:space:]')
 
 read -p "➔ Activate Multi-Tenant / Custom OneSignal routing? (yes/no): " IS_CUSTOM
 CUSTOM_APP_ID="null"
@@ -93,8 +203,8 @@ if [[ "$IS_TELEGRAM" =~ ^([yY][eE][sS]|[yY])$ ]]; then
   TG_CHAT_ID=$(echo "$TG_CHAT_ID" | tr -d '[:space:]')
 fi
 
-if [ -z "$NODE_UID" ]; then
-    echo "[ERROR] Required initialization variable missing: NODE_UID cannot be null."
+if [ -z "$NODE_UID" ] || [ -z "$MIN_ALERT_LEVEL" ]; then
+    echo "[ERROR] Required initialization variable missing."
     exit 1
 fi
 
@@ -199,20 +309,18 @@ chown root:wazuh $INTEGRATION_SCRIPT
 echo "[STATUS] Updating structural layout rules -> $OSSEC_CONF"
 cp $OSSEC_CONF "${OSSEC_CONF}.bak"
 
-# Define the isolated payload snippet for this specific tenant configuration entry
-NEW_XML_BLOCK="  <integration>\n    <name>custom-synklav-${NODE_UID}</name>\n    <level>1</level>\n    <alert_format>json</alert_format>\n  </integration>"
+NEW_XML_BLOCK="  <integration>\n    <name>custom-synklav-${NODE_UID}</name>\n    <level>${MIN_ALERT_LEVEL}</level>\n    <alert_format>json</alert_format>\n  </integration>"
 
 if [ "$EXEC_PROFILE" == "1" ]; then
-  # INITIALIZE MODE: Pure initialization block setup including wrappers
   if grep -q "" "$OSSEC_CONF"; then
-    echo "[ERROR] System already initialized. Use profile 2 (UPDATE) to register additional users."
+    echo "[ERROR] System already initialized. Use profile 2 (ADD USER) to register additional nodes."
     exit 1
   fi
   
   cat << EOF > /tmp/synklav_append.xml
 <integration>
     <name>custom-synklav-${NODE_UID}</name>
-    <level>1</level>
+    <level>${MIN_ALERT_LEVEL}</level>
     <alert_format>json</alert_format>
   </integration>
 EOF
@@ -220,22 +328,19 @@ EOF
   rm /tmp/synklav_append.xml
 
 elif [ "$EXEC_PROFILE" == "2" ]; then
-  # UPDATE MODE: Safely append new tenant blocks inside the core wrapper zone
   if ! grep -q "" "$OSSEC_CONF"; then
     echo "[ERROR] Synklav core missing from ossec.conf. Run profile 1 (INITIALIZE) first."
     exit 1
   fi
   
-  # Prevent duplicated configuration bindings for identical keys
   if grep -q "custom-synklav-${NODE_UID}" "$OSSEC_CONF"; then
     echo "[WARNING] Configuration mapping for node $NODE_UID already exists. Refreshing script file only."
   else
-    # Append code block systematically directly above the closing tag block identifier anchor
     sed -i "//i $NEW_XML_BLOCK" $OSSEC_CONF
   fi
 fi
 
-# 5. REBOOT WAHAZH PROCESSCORE
+# 5. REBOOT WAZUH
 echo "[STATUS] Hot-rebooting Wazuh engine process core..."
 /var/ossec/bin/wazuh-control restart
 
