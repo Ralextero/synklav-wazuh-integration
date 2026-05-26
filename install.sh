@@ -65,7 +65,6 @@ if exec_profile in [1, 2]:
     node_uid = input("➔ Enter target UNIQUE NODE UID: ").strip()
     recovery_kit = input("➔ Enter your 24-word Recovery Kit (single line): ").strip().lower()
     
-    # Clean multiple spaces
     recovery_kit = " ".join(recovery_kit.split())
     word_count = len(recovery_kit.split())
     
@@ -115,11 +114,15 @@ if exec_profile in [1, 2]:
 
 output_content = content
 
+# VARIABLES CON ANCLAJES EXPLÍCITOS PARA EVITAR TRITURACIÓN DE BASH
+START_ANCHOR = ""
+END_ANCHOR = ""
+
 if exec_profile == 5:
     # PURGE ALL MODE
-    if '' in output_content and '' in output_content:
-        parts = output_content.split('')
-        sub_parts = parts[1].split('')
+    if START_ANCHOR in output_content and END_ANCHOR in output_content:
+        parts = output_content.split(START_ANCHOR)
+        sub_parts = parts[1].split(END_ANCHOR)
         output_content = parts[0] + sub_parts[1]
         
     lines = output_content.splitlines()
@@ -144,7 +147,7 @@ if exec_profile == 5:
                 inside_block = False
                 block_buffer = []
             continue
-        if '' in line or '' in line:
+        if START_ANCHOR in line or END_ANCHOR in line:
             continue
         new_lines.append(line)
     output_content = '\n'.join(new_lines) + '\n'
@@ -213,17 +216,17 @@ elif exec_profile == 3:
 
 elif exec_profile == 1:
     # INITIALIZE MODE
-    if '' in output_content:
+    if START_ANCHOR in output_content:
         print('[ERROR] System already initialized. Use profile 2 (ADD USER) to register additional nodes.')
         sys.exit(1)
         
-    new_block = f'\n  <integration>\n    <name>custom-synklav-{node_uid}</name>\n    <level>{min_alert_level}</level>\n    <alert_format>json</alert_format>\n  </integration>\n\n'
+    new_block = f'{START_ANCHOR}\n  <integration>\n    <name>custom-synklav-{node_uid}</name>\n    <level>{min_alert_level}</level>\n    <alert_format>json</alert_format>\n  </integration>\n{END_ANCHOR}\n'
     if '</ossec_config>' in output_content:
         output_content = output_content.replace('</ossec_config>', f'{new_block}</ossec_config>')
 
 elif exec_profile == 2:
     # ADD USER MODE
-    if '' not in output_content:
+    if START_ANCHOR not in output_content:
         print('[ERROR] Synklav core missing. Run profile 1 (INITIALIZE) first.')
         sys.exit(1)
         
@@ -231,8 +234,8 @@ elif exec_profile == 2:
     if f'<name>{target_name}</name>' in output_content:
         print(f'[WARNING] Node {node_uid} already exists. Overwriting handler script only.')
     else:
-        new_integration = f'  <integration>\n    <name>{target_name}</name>\n    <level>{min_alert_level}</level>\n    <alert_format>json</alert_format>\n  </integration>\n'
-        output_content = output_content.replace('', new_integration)
+        new_integration = f'  <integration>\n    <name>{target_name}</name>\n    <level>{min_alert_level}</level>\n    <alert_format>json</alert_format>\n  </integration>\n{END_ANCHOR}'
+        output_content = output_content.replace(END_ANCHOR, new_integration)
 
 # ATOMIC COMMIT
 if len(output_content.strip()) < 200 or 'ossec_config' not in output_content:
@@ -303,7 +306,7 @@ except:
     except:
         pass
 
-print("[STATUS] Hot-rebooting Wazuh engine process core...")
+print("[STATUS] Hot-rebooting Wazuh engine process core..." )
 os.system("/var/ossec/bin/wazuh-control restart")
 
 if exec_profile in [1, 2]:
