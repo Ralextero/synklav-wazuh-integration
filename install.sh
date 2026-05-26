@@ -62,7 +62,7 @@ tmp_path = conf_path + '.tmp'
 with open(conf_path, 'r') as f:
     content = f.read()
 
-# 1. Strip anchored segments
+# 1. Clean anchored blocks if they exist
 if '' in content:
     try:
         parts = content.split('')
@@ -71,7 +71,7 @@ if '' in content:
     except Exception:
         pass
 
-# 2. Extract loose unanchored integration matrices
+# 2. Line by line purge fallback to remove any lingering custom-synklav integration trees
 lines = content.splitlines()
 new_lines = []
 block_buffer = []
@@ -106,8 +106,8 @@ for l in new_lines:
 
 final_string = '\n'.join(final_output) + '\n'
 
-# SANITY CHECK: Anti-corruption defensive wall (Never write empty payloads)
-if len(final_string).strip() < 200 or '<ossec_config>' not in final_string:
+# SANITY CHECK: Anti-corruption defensive wall (Fixed parenthesis bug)
+if len(final_string.strip()) < 200 or '<ossec_config>' not in final_string:
     print('[CRITICAL ERROR] Purge process structural anomaly detected. Aborting configuration write to save ossec.conf.')
     sys.exit(1)
 
@@ -180,8 +180,8 @@ for line in lines:
 
 final_string = ''.join(new_lines)
 
-# Sanity enforcement check
-if len(final_string).strip() < 200 or '<ossec_config>' not in final_string:
+# Sanity enforcement check (Fixed parenthesis bug)
+if len(final_string.strip()) < 200 or '<ossec_config>' not in final_string:
     print('[CRITICAL ERROR] Anomaly caught during execution block filtering. Target write aborted.')
     sys.exit(1)
 
@@ -238,7 +238,7 @@ for line in lines:
 
 final_string = ''.join(new_lines)
 
-if len(final_string).strip() < 200 or '<ossec_config>' not in final_string:
+if len(final_string.strip()) < 200 or '<ossec_config>' not in final_string:
     sys.exit(1)
 
 with open(tmp_path, 'w') as f:
@@ -330,7 +330,7 @@ INTEGRATION_SCRIPT="/var/ossec/integrations/custom-synklav-${NODE_UID}"
 echo "[STATUS] Writing localized script handler instance -> $INTEGRATION_SCRIPT"
 
 cat << 'EOF' > $INTEGRATION_SCRIPT
-#!/usr/python3
+#!/usr/bin/python3
 import sys
 import json
 import http.client
