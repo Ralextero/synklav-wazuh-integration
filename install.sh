@@ -27,20 +27,60 @@ echo " 5) PURGE ALL       : Complete atomic removal of all Synklav structures."
 read -p "➔ Enter profile selection (1-5): " EXEC_PROFILE
 
 # ------------------------------------------------------------------------------
-# PROFILE 5: PURGE ALL OPERATIONS
+# PROFILE 5: PURGE ALL OPERATIONS (BLINDADO CON PYTHON CORE - ANTI-SED-FAIL)
 # ------------------------------------------------------------------------------
 if [ "$EXEC_PROFILE" == "5" ]; then
   echo "[WARNING] Initializing complete system purge of Synklav assets..."
   cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
   
+  # Remove physical python script handlers
   rm -f /var/ossec/integrations/custom-synklav*
   
-  if grep -q "" "$OSSEC_CONF"; then
-    sed -i '//,//d' "$OSSEC_CONF"
-    echo "[STATUS] Block boundaries stripped from ossec.conf cleanly."
-  fi
-  sed -i '/<integration>/{:a;N;/<\/integration>/!ba;/custom-synklav/d}' "$OSSEC_CONF"
+  # Safe Python structural and legacy integration vacuum
+  python3 -c "
+conf_path = '$OSSEC_CONF'
+with open(conf_path, 'r') as f:
+    content = f.read()
+
+# 1. Clean anchored blocks if they exist
+if '' in content and '' in content:
+    parts = content.split('')
+    sub_parts = parts[1].split('')
+    content = parts[0] + sub_parts[1]
+
+# 2. Line by line purge fallback to remove any lingering custom-synklav integration trees
+lines = content.splitlines()
+new_lines = []
+block_buffer = []
+inside_integration = False
+has_synklav = False
+
+for line in lines:
+    if '<integration>' in line:
+        inside_integration = True
+        block_buffer = [line]
+        has_synklav = False
+        continue
+        
+    if inside_integration:
+        block_buffer.append(line)
+        if 'custom-synklav' in line:
+            has_synklav = True
+        if '</integration>' in line:
+            if not has_synklav:
+                new_lines.extend(block_buffer)
+            inside_integration = False
+            block_buffer = []
+        continue
+        
+    new_lines.append(line)
+
+with open(conf_path, 'w') as f:
+    f.write('\n'.join(new_lines) + '\n')
+"
+  echo "[STATUS] All configuration boundaries and custom nodes evicted smoothly."
   
+  echo "[STATUS] Hot-rebooting Wazuh engine process core..."
   /var/ossec/bin/wazuh-control restart
   echo "===================================================="
   echo " 🔥 PURGE OPERATION COMPLETE: SYSTEM RESTORED CLEANLY"
@@ -63,13 +103,9 @@ if [ "$EXEC_PROFILE" == "4" ]; then
   echo "[STATUS] Initiating targeted removal for node: $TARGET_UID"
   cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
 
-  # Remove physical python script handler
   rm -f "/var/ossec/integrations/custom-synklav-${TARGET_UID}"
 
-  # Safe programmatic XML block removal without regex corruption
-  # It reads lines and omits the integration block matching our specific node name
   python3 -c "
-import os
 conf_path = '$OSSEC_CONF'
 target_name = 'custom-synklav-$TARGET_UID'
 
@@ -123,39 +159,27 @@ if [ "$EXEC_PROFILE" == "3" ]; then
   echo "[STATUS] Modifying Telegram alert execution thresholds to level $NEW_LVL..."
   cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
 
-  # Safe Python XML modifier to target only the specific integration name block
   python3 -c "
 conf_path = '$OSSEC_CONF'
 target_name = 'custom-synklav-$TARGET_UID'
 new_level = '$NEW_LVL'
 
 with open(conf_path, 'r') as f:
-    content = f.read()
+    lines = f.readlines()
 
-# We isolate our target block and update its level key via inline search
-if f'<name>{target_name}</name>' in content:
-    with open(conf_path, 'r') as f:
-        lines = f.readlines()
-    
-    new_lines = []
-    inside_target = False
-    for line in lines:
-        if '<integration>' in line:
-            inside_target = False
-            block_buffer = [line]
-            new_lines.append(line)
-            continue
-        if 'custom-synklav-' in line and f'{target_name}' in line:
-            inside_target = True
-        if inside_target and '<level>' in line:
-            line = f'    <level>{new_level}</level>\n'
-        new_lines.append(line)
-    
-    with open(conf_path, 'w') as f:
-        f.writelines(new_lines)
-    print('[SUCCESS]')
-else:
-    print('[NOT_FOUND]')
+new_lines = []
+inside_target = False
+for line in lines:
+    if '<integration>' in line:
+        inside_target = False
+    if 'custom-synklav-' in line and f'{target_name}' in line:
+        inside_target = True
+    if inside_target and '<level>' in line:
+        line = f'    <level>{new_level}</level>\n'
+    new_lines.append(line)
+
+with open(conf_path, 'w') as f:
+    f.writelines(new_lines)
 "
   /var/ossec/bin/wazuh-control restart
   exit 0
