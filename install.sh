@@ -27,28 +27,41 @@ echo " 5) PURGE ALL       : Complete atomic removal of all Synklav structures."
 read -p "➔ Enter profile selection (1-5): " EXEC_PROFILE
 
 # ------------------------------------------------------------------------------
-# PROFILE 5: PURGE ALL OPERATIONS (BLINDADO CON PYTHON CORE - ANTI-SED-FAIL)
+# PROFILE 5: PURGE ALL OPERATIONS (INTELLIGENT FILE & CONFIG VACUUM)
 # ------------------------------------------------------------------------------
 if [ "$EXEC_PROFILE" == "5" ]; then
   echo "[WARNING] Initializing complete system purge of Synklav assets..."
   cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
   
-  # Remove physical python script handlers
-  rm -f /var/ossec/integrations/custom-synklav*
-  
-  # Safe Python structural and legacy integration vacuum
+  # Safe Python vacuum for files and configuration blocks
   python3 -c "
+import os
+
+# 1. Clear physical integration files from disk without globbing bugs
+int_dir = '/var/ossec/integrations/'
+if os.path.exists(int_dir):
+    for file in os.listdir(int_dir):
+        if file.startswith('custom-synklav'):
+            try:
+                os.remove(os.path.path.join(int_dir, file))
+            except Exception:
+                pass
+
+# 2. Extract configuration syntax cleanly
 conf_path = '$OSSEC_CONF'
 with open(conf_path, 'r') as f:
     content = f.read()
 
-# 1. Clean anchored blocks if they exist
-if '' in content and '' in content:
-    parts = content.split('')
-    sub_parts = parts[1].split('')
-    content = parts[0] + sub_parts[1]
+# Strip any anchored zone completely
+if '' in content:
+    try:
+        parts = content.split('')
+        sub_parts = parts[1].split('')
+        content = parts[0] + sub_parts[1]
+    except Exception:
+        pass
 
-# 2. Line by line purge fallback to remove any lingering custom-synklav integration trees
+# 3. Strip loose non-anchored integration blocks targeting custom-synklav
 lines = content.splitlines()
 new_lines = []
 block_buffer = []
@@ -75,8 +88,15 @@ for line in lines:
         
     new_lines.append(line)
 
+# Clean up any residual boundary strings left by legacy manual edits
+final_output = []
+for l in new_lines:
+    if '' in l or '' in l:
+        continue
+    final_output.append(l)
+
 with open(conf_path, 'w') as f:
-    f.write('\n'.join(new_lines) + '\n')
+    f.write('\n'.join(final_output) + '\n')
 "
   echo "[STATUS] All configuration boundaries and custom nodes evicted smoothly."
   
@@ -104,6 +124,7 @@ if [ "$EXEC_PROFILE" == "4" ]; then
   cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
 
   rm -f "/var/ossec/integrations/custom-synklav-${TARGET_UID}"
+  rm -f "/var/ossec/integrations/custom-synklav-node_${TARGET_UID}"
 
   python3 -c "
 conf_path = '$OSSEC_CONF'
