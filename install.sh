@@ -26,33 +26,43 @@ echo " 4) REMOVE USER     : Delete a single specific user profile cleanly."
 echo " 5) PURGE ALL       : Complete atomic removal of all Synklav structures."
 read -p "➔ Enter profile selection (1-5): " EXEC_PROFILE
 
+# TIMESTAMPED BACKUP ROUTINE FOR ANTI-DATA-LOSS
+TIMESTAMP=$(date +%Y%m%d%H%M%S)
+BACKUP_CONF="${OSSEC_CONF}.${TIMESTAMP}.bak"
+
 # ------------------------------------------------------------------------------
-# PROFILE 5: PURGE ALL OPERATIONS (INTELLIGENT FILE & CONFIG VACUUM)
+# PROFILE 5: PURGE ALL OPERATIONS (ATOMIC REWRITE VECTOR - IMMUNE TO EMPTY FILES)
 # ------------------------------------------------------------------------------
 if [ "$EXEC_PROFILE" == "5" ]; then
   echo "[WARNING] Initializing complete system purge of Synklav assets..."
+  cp "$OSSEC_CONF" "$BACKUP_CONF"
   cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
   
-  # Safe Python vacuum for files and configuration blocks
+  # Remove physical integration files from disk securely
   python3 -c "
 import os
-
-# 1. Clear physical integration files from disk without globbing bugs
 int_dir = '/var/ossec/integrations/'
 if os.path.exists(int_dir):
-    for file in os.listdir(int_dir):
-        if file.startswith('custom-synklav'):
+    for f in os.listdir(int_dir):
+        if f.startswith('custom-synklav'):
             try:
-                os.remove(os.path.path.join(int_dir, file))
+                os.remove(os.path.join(int_dir, f))
             except Exception:
                 pass
+"
 
-# 2. Extract configuration syntax cleanly
+  # Safe Structural Clean Up using Atomic Temp Write Protection
+  python3 -c "
+import os
+import sys
+
 conf_path = '$OSSEC_CONF'
+tmp_path = conf_path + '.tmp'
+
 with open(conf_path, 'r') as f:
     content = f.read()
 
-# Strip any anchored zone completely
+# 1. Strip anchored segments
 if '' in content:
     try:
         parts = content.split('')
@@ -61,7 +71,7 @@ if '' in content:
     except Exception:
         pass
 
-# 3. Strip loose non-anchored integration blocks targeting custom-synklav
+# 2. Extract loose unanchored integration matrices
 lines = content.splitlines()
 new_lines = []
 block_buffer = []
@@ -88,18 +98,28 @@ for line in lines:
         
     new_lines.append(line)
 
-# Clean up any residual boundary strings left by legacy manual edits
 final_output = []
 for l in new_lines:
     if '' in l or '' in l:
         continue
     final_output.append(l)
 
-with open(conf_path, 'w') as f:
-    f.write('\n'.join(final_output) + '\n')
-"
+final_string = '\n'.join(final_output) + '\n'
+
+# SANITY CHECK: Anti-corruption defensive wall (Never write empty payloads)
+if len(final_string).strip() < 200 or '<ossec_config>' not in final_string:
+    print('[CRITICAL ERROR] Purge process structural anomaly detected. Aborting configuration write to save ossec.conf.')
+    sys.exit(1)
+
+# Atomic file commit
+with open(tmp_path, 'w') as f:
+    f.write(final_string)
+
+os.replace(tmp_path, conf_path)
+print('[SUCCESS]')
+" || exit 1
+
   echo "[STATUS] All configuration boundaries and custom nodes evicted smoothly."
-  
   echo "[STATUS] Hot-rebooting Wazuh engine process core..."
   /var/ossec/bin/wazuh-control restart
   echo "===================================================="
@@ -109,7 +129,7 @@ with open(conf_path, 'w') as f:
 fi
 
 # ------------------------------------------------------------------------------
-# PROFILE 4: REMOVE SINGLE USER PROFILE (ANTI-ACCUMULATION / REGENERATION)
+# PROFILE 4: REMOVE SINGLE USER PROFILE (ATOMIC SAFETY ENGINE)
 # ------------------------------------------------------------------------------
 if [ "$EXEC_PROFILE" == "4" ]; then
   read -p "➔ Enter the specific NODE UID to remove: " TARGET_UID
@@ -121,13 +141,16 @@ if [ "$EXEC_PROFILE" == "4" ]; then
   fi
 
   echo "[STATUS] Initiating targeted removal for node: $TARGET_UID"
-  cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
+  cp "$OSSEC_CONF" "$BACKUP_CONF"
 
   rm -f "/var/ossec/integrations/custom-synklav-${TARGET_UID}"
-  rm -f "/var/ossec/integrations/custom-synklav-node_${TARGET_UID}"
 
   python3 -c "
+import os
+import sys
+
 conf_path = '$OSSEC_CONF'
+tmp_path = conf_path + '.tmp'
 target_name = 'custom-synklav-$TARGET_UID'
 
 with open(conf_path, 'r') as f:
@@ -155,16 +178,26 @@ for line in lines:
         
     new_lines.append(line)
 
-with open(conf_path, 'w') as f:
-    f.writelines(new_lines)
-"
+final_string = ''.join(new_lines)
+
+# Sanity enforcement check
+if len(final_string).strip() < 200 or '<ossec_config>' not in final_string:
+    print('[CRITICAL ERROR] Anomaly caught during execution block filtering. Target write aborted.')
+    sys.exit(1)
+
+with open(tmp_path, 'w') as f:
+    f.write(final_string)
+
+os.replace(tmp_path, conf_path)
+" || exit 1
+
   echo "[STATUS] Custom node block matching $TARGET_UID evicted from configuration."
   /var/ossec/bin/wazuh-control restart
   exit 0
 fi
 
 # ------------------------------------------------------------------------------
-# PROFILE 3: UPDATE TELEGRAM ALERT LEVEL IN PLACE
+# PROFILE 3: UPDATE TELEGRAM ALERT LEVEL IN PLACE (ATOMIC SAFETY ENGINE)
 # ------------------------------------------------------------------------------
 if [ "$EXEC_PROFILE" == "3" ]; then
   read -p "➔ Enter the target NODE UID to update: " TARGET_UID
@@ -178,10 +211,14 @@ if [ "$EXEC_PROFILE" == "3" ]; then
   fi
 
   echo "[STATUS] Modifying Telegram alert execution thresholds to level $NEW_LVL..."
-  cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
+  cp "$OSSEC_CONF" "$BACKUP_CONF"
 
   python3 -c "
+import os
+import sys
+
 conf_path = '$OSSEC_CONF'
+tmp_path = conf_path + '.tmp'
 target_name = 'custom-synklav-$TARGET_UID'
 new_level = '$NEW_LVL'
 
@@ -199,9 +236,17 @@ for line in lines:
         line = f'    <level>{new_level}</level>\n'
     new_lines.append(line)
 
-with open(conf_path, 'w') as f:
-    f.writelines(new_lines)
-"
+final_string = ''.join(new_lines)
+
+if len(final_string).strip() < 200 or '<ossec_config>' not in final_string:
+    sys.exit(1)
+
+with open(tmp_path, 'w') as f:
+    f.write(final_string)
+
+os.replace(tmp_path, conf_path)
+" || exit 1
+
   /var/ossec/bin/wazuh-control restart
   exit 0
 fi
@@ -285,7 +330,7 @@ INTEGRATION_SCRIPT="/var/ossec/integrations/custom-synklav-${NODE_UID}"
 echo "[STATUS] Writing localized script handler instance -> $INTEGRATION_SCRIPT"
 
 cat << 'EOF' > $INTEGRATION_SCRIPT
-#!/usr/bin/python3
+#!/usr/python3
 import sys
 import json
 import http.client
@@ -352,7 +397,7 @@ chown root:wazuh $INTEGRATION_SCRIPT
 # CONFIGURATION INJECTION AND MULTI-TENANT HANDLING
 # ------------------------------------------------------------------------------
 echo "[STATUS] Updating structural layout rules -> $OSSEC_CONF"
-cp $OSSEC_CONF "${OSSEC_CONF}.bak"
+cp $OSSEC_CONF "$BACKUP_CONF"
 
 NEW_XML_BLOCK="  <integration>\n    <name>custom-synklav-${NODE_UID}</name>\n    <level>${MIN_ALERT_LEVEL}</level>\n    <alert_format>json</alert_format>\n  </integration>"
 
