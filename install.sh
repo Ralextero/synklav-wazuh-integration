@@ -115,12 +115,11 @@ if exec_profile in [1, 2]:
     onesignal_tag_hash = hashlib.sha256((notification_key + node_uid).encode('utf-8')).hexdigest()
 
 # ------------------------------------------------------------------------------
-# XML CONFIGURATION HANDLING (REGEX BASED - ZERO LOOP STATE ERRORS)
+# XML CONFIGURATION HANDLING
 # ------------------------------------------------------------------------------
 with open(OSSEC_CONF, 'r', encoding='utf-8') as f:
     output_content = f.read()
 
-# SAFEGUARD 1: Check baseline integrity
 if "<ossec_config>" not in output_content or "</ossec_config>" not in output_content:
     print("[CRITICAL ERROR] Target ossec.conf is corrupted or missing master <ossec_config> tags.")
     sys.exit(1)
@@ -130,17 +129,16 @@ END_MARK = ""
 target_integration_name = f"custom-synklav-{node_uid}"
 
 if exec_profile == 5:
-    # PURGE ALL: Removes the entire block and any stray custom-synklav integrations
-    output_content = re.sub(r'[ \t]*.*?\n*', '', output_content, flags=re.DOTALL)
+    # PURGE ALL: Non-greedy approach. Dissolves markers and explicitly removes only integrations.
+    output_content = output_content.replace(START_MARK, "").replace(END_MARK, "")
     output_content = re.sub(r'[ \t]*<integration>\s*<name>custom-synklav-[^<]+</name>.*?</integration>\n*', '', output_content, flags=re.DOTALL)
     
-    # Remove all physical integration files
     for f_path in glob.glob('/var/ossec/integrations/custom-synklav*'):
         try: os.remove(f_path)
         except: pass
 
 elif exec_profile == 4:
-    # REMOVE SINGLE USER: Extracts only the specific integration node
+    # REMOVE SINGLE USER
     pattern = r'[ \t]*<integration>\s*<name>' + re.escape(target_integration_name) + r'</name>.*?</integration>\n*'
     output_content = re.sub(pattern, '', output_content, flags=re.DOTALL)
     
@@ -153,11 +151,11 @@ elif exec_profile == 3:
         print(f"[ERROR] Node profile for {node_uid} not found in configuration.")
         sys.exit(1)
         
-    pattern = r'([ \t]*<integration>\s*<name>' + re.escape(target_integration_name) + r'</name>.*?)<level>\d+</level>(.*?</integration>)'
+    pattern = r'([ \t]*<integration>\s*<name>' + re.escape(target_integration_name) + r'</name>.*?)<level>\s*\d+\s*</level>(.*?</integration>)'
     output_content = re.sub(pattern, r'\g<1><level>' + min_alert_level + r'</level>\g<2>', output_content, flags=re.DOTALL)
 
 elif exec_profile == 1:
-    # INITIALIZE: Creates the isolated zone and registers the first node
+    # INITIALIZE
     if START_MARK in output_content:
         print("[ERROR] System already initialized. Use profile 2 (ADD USER) to register additional nodes.")
         sys.exit(1)
@@ -166,7 +164,7 @@ elif exec_profile == 1:
     output_content = output_content.replace("</ossec_config>", f"{new_block}</ossec_config>")
 
 elif exec_profile == 2:
-    # ADD USER: Injects a new node precisely inside the existing isolated zone
+    # ADD USER
     if START_MARK not in output_content:
         print("[ERROR] Synklav core missing. Run profile 1 (INITIALIZE) first.")
         sys.exit(1)
@@ -195,7 +193,6 @@ os.replace(tmp_path, OSSEC_CONF)
 if exec_profile in [1, 2]:
     script_path = f"/var/ossec/integrations/{target_integration_name}"
     
-    # Note: Double brackets {{ and }} are mandatory here to escape Python's f-string dictionary injection
     script_code = f"""#!/usr/bin/python3
 import sys, json, http.client, urllib.parse, hmac, hashlib, time
 
