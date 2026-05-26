@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SYNKLAV - AUTOMATED WAZUH INTEGRATION SETUP SCRIPT (ZERO-TRUST ARCHITECTURE)
+# SYNKLAV - AUTOMATED MULTI-MODE WAZUH INTEGRATION DEPLOYMENT MANIFEST
 # ==============================================================================
 
 # Enforce root privileges
@@ -11,14 +11,58 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "===================================================="
-echo " SYNKLAV HUB SYSTEM INTEGRATION ENGINE SETUP        "
+echo " SYNKLAV HUB SYSTEM INTEGRATION ENGINE              "
 echo "===================================================="
 
-# HARDCODED CENTRAL HUB PERIMETER GATEWAY
+OSSEC_CONF="/var/ossec/etc/ossec.conf"
 WORKER_URL="https://synklav-notification-hub.synklav.workers.dev/"
 
-# 1. PARAMETER ACQUISITION
-read -p "➔ Enter target NODE UID: " NODE_UID
+# SYSTEM MODE SELECTION
+echo "Select execution profile:"
+echo " 1) INITIALIZE : Fresh deployment of Synklav core."
+echo " 2) UPDATE     : Append a new multi-tenant node / user profile."
+echo " 3) PURGE      : Complete atomic removal of all Synklav structures."
+read -p "➔ Enter profile selection (1-3): " EXEC_PROFILE
+
+# ------------------------------------------------------------------------------
+# PROFILE 3: PURGE OPERATION
+# ------------------------------------------------------------------------------
+if [ "$EXEC_PROFILE" == "3" ]; then
+  echo "[WARNING] Initializing complete system purge of Synklav assets..."
+  
+  # Structural backup
+  cp "$OSSEC_CONF" "${OSSEC_CONF}.bak"
+  
+  # Safely wipe any custom-synklav python handlers inside the integration directory
+  rm -f /var/ossec/integrations/custom-synklav*
+  
+  # Atomic removal of blocks wrapped inside Synklav anchors
+  if grep -q "" "$OSSEC_CONF"; then
+    sed -i '//,//d' "$OSSEC_CONF"
+    echo "[STATUS] Synklav integration block stripped from ossec.conf cleanly."
+  else
+    echo "[STATUS] No anchor tags found. Scanning for legacy loose integrations..."
+    # Fallback safe individual configuration block deletion line
+    sed -i '/<integration>/,/<\/integration>/{/custom-synklav/d}' "$OSSEC_CONF"
+  fi
+  
+  echo "[STATUS] Hot-rebooting Wazuh engine process core..."
+  /var/ossec/bin/wazuh-control restart
+  echo "===================================================="
+  echo " 🔥 PURGE OPERATION COMPLETE: SYSTEM RESTORED CLEANLY"
+  echo "===================================================="
+  exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# PROFILES 1 & 2: DATA ACQUISITION
+# ------------------------------------------------------------------------------
+if [ "$EXEC_PROFILE" != "1" ] && [ "$EXEC_PROFILE" != "2" ]; then
+  echo "[ERROR] Invalid selection matrix context."
+  exit 1
+fi
+
+read -p "➔ Enter target UNIQUE NODE UID: " NODE_UID
 NODE_UID=$(echo "$NODE_UID" | tr -d '[:space:]')
 
 read -p "➔ Enter 24-word Recovery Kit (single space-separated line): " RECOVERY_KIT
@@ -30,7 +74,6 @@ if [ "$WORD_COUNT" -ne 24 ]; then
   exit 1
 fi
 
-# CUSTOM TARGET ONESIGNAL PARAMETERS
 read -p "➔ Activate Multi-Tenant / Custom OneSignal routing? (yes/no): " IS_CUSTOM
 CUSTOM_APP_ID="null"
 CUSTOM_REST_KEY="null"
@@ -42,7 +85,6 @@ if [[ "$IS_CUSTOM" =~ ^([yY][eE][sS]|[yY])$ ]]; then
   CUSTOM_REST_KEY=$(echo "$CUSTOM_REST_KEY" | tr -d '[:space:]')
 fi
 
-# PARALLEL TELEGRAM ROUTING PARAMS
 read -p "➔ Active secondary Telegram notification routing? (yes/no): " IS_TELEGRAM
 TG_CHAT_ID="null"
 
@@ -58,7 +100,7 @@ fi
 
 echo "[STATUS] Computing symmetric cryptographic key derivations via BIP39..."
 
-# 2. DETERMINISTIC CIPHER GENERATION (MIRRORS FLUTTERFLOW RUNTIME ENGINE)
+# DETERMINISTIC CIPHER GENERATION
 HASHES=$(python3 -c "
 import hashlib
 import binascii
@@ -83,9 +125,9 @@ print(f'{notification_key}:{onesignal_tag_hash}')
 NOTIFICATION_KEY=$(echo "$HASHES" | cut -d':' -f1)
 ONESIGNAL_TAG_HASH=$(echo "$HASHES" | cut -d':' -f2)
 
-# 3. BINARY COMPILATION AND REPLACEMENT
-INTEGRATION_SCRIPT="/var/ossec/integrations/custom-synklav"
-echo "[STATUS] Writing script handler instance -> $INTEGRATION_SCRIPT"
+# CREATE UNIQUE MULTI-TENANT PYTHON HANDLER DESTINATION
+INTEGRATION_SCRIPT="/var/ossec/integrations/custom-synklav-${NODE_UID}"
+echo "[STATUS] Writing localized script handler instance -> $INTEGRATION_SCRIPT"
 
 cat << 'EOF' > $INTEGRATION_SCRIPT
 #!/usr/bin/python3
@@ -102,7 +144,6 @@ alert_file = sys.argv[1]
 with open(alert_file, 'r') as f:
     alert_json = f.read()
 
-# EMBEDDED IMMUTABLE IDENTIFIERS
 NODE_UID = "${NODE_UID}"
 WORKER_URL = "${WORKER_URL}"
 NOTIFICATION_KEY = "${NOTIFICATION_KEY}"
@@ -117,7 +158,6 @@ path = parsed_url.path if parsed_url.path else "/"
 
 timestamp = str(int(time.time()))
 
-# Anti-Tamper Checksum signature generation
 message = (alert_json + timestamp + NODE_UID).encode('utf-8')
 signature = hmac.new(bytes.fromhex(NOTIFICATION_KEY), message, hashlib.sha256).hexdigest()
 
@@ -142,7 +182,6 @@ except Exception:
     sys.exit(0)
 EOF
 
-# Parameter injection pass
 sed -i "s/\${NODE_UID}/$NODE_UID/g" $INTEGRATION_SCRIPT
 sed -i "s|\${WORKER_URL}|$WORKER_URL|g" $INTEGRATION_SCRIPT
 sed -i "s/\${NOTIFICATION_KEY}/$NOTIFICATION_KEY/g" $INTEGRATION_SCRIPT
@@ -151,33 +190,57 @@ sed -i "s/\${TG_CHAT_ID}/$TG_CHAT_ID/g" $INTEGRATION_SCRIPT
 sed -i "s/\${CUSTOM_APP_ID}/$CUSTOM_APP_ID/g" $INTEGRATION_SCRIPT
 sed -i "s/\${CUSTOM_REST_KEY}/$CUSTOM_REST_KEY/g" $INTEGRATION_SCRIPT
 
-# Set strict system group permissions
 chmod 750 $INTEGRATION_SCRIPT
 chown root:wazuh $INTEGRATION_SCRIPT
 
-# 4. ENGINE INTEGRATION MODIFICATION (ossec.conf)
-OSSEC_CONF="/var/ossec/etc/ossec.conf"
-echo "[STATUS] Injecting structural layout rules -> $OSSEC_CONF"
-
+# ------------------------------------------------------------------------------
+# CONFIGURATION INJECTION AND MULTI-TENANT HANDLING
+# ------------------------------------------------------------------------------
+echo "[STATUS] Updating structural layout rules -> $OSSEC_CONF"
 cp $OSSEC_CONF "${OSSEC_CONF}.bak"
 
-cat << EOF > /tmp/synklav_block.xml
-  <integration>
-    <name>custom-synklav</name>
-    <level>1</level> 
+# Define the isolated payload snippet for this specific tenant configuration entry
+NEW_XML_BLOCK="  <integration>\n    <name>custom-synklav-${NODE_UID}</name>\n    <level>1</level>\n    <alert_format>json</alert_format>\n  </integration>"
+
+if [ "$EXEC_PROFILE" == "1" ]; then
+  # INITIALIZE MODE: Pure initialization block setup including wrappers
+  if grep -q "" "$OSSEC_CONF"; then
+    echo "[ERROR] System already initialized. Use profile 2 (UPDATE) to register additional users."
+    exit 1
+  fi
+  
+  cat << EOF > /tmp/synklav_append.xml
+<integration>
+    <name>custom-synklav-${NODE_UID}</name>
+    <level>1</level>
     <alert_format>json</alert_format>
   </integration>
 EOF
+  sed -i '/<\/ossec_config>/e cat /tmp/synklav_append.xml' $OSSEC_CONF
+  rm /tmp/synklav_append.xml
 
-sed -i '/<\/ossec_config>/e cat /tmp/synklav_block.xml' $OSSEC_CONF
-rm /tmp/synklav_block.xml
+elif [ "$EXEC_PROFILE" == "2" ]; then
+  # UPDATE MODE: Safely append new tenant blocks inside the core wrapper zone
+  if ! grep -q "" "$OSSEC_CONF"; then
+    echo "[ERROR] Synklav core missing from ossec.conf. Run profile 1 (INITIALIZE) first."
+    exit 1
+  fi
+  
+  # Prevent duplicated configuration bindings for identical keys
+  if grep -q "custom-synklav-${NODE_UID}" "$OSSEC_CONF"; then
+    echo "[WARNING] Configuration mapping for node $NODE_UID already exists. Refreshing script file only."
+  else
+    # Append code block systematically directly above the closing tag block identifier anchor
+    sed -i "//i $NEW_XML_BLOCK" $OSSEC_CONF
+  fi
+fi
 
-# 5. INTEGRATION ENGINE REBOOT
+# 5. REBOOT WAHAZH PROCESSCORE
 echo "[STATUS] Hot-rebooting Wazuh engine process core..."
 /var/ossec/bin/wazuh-control restart
 
 echo "===================================================="
-echo " PRODUCTION DEPLOYMENT COMPLETE                     "
+echo " SYSTEM CONFIGURATION PASS VERIFIED                 "
 echo "===================================================="
 echo "⚠️  METRIC SUMMARY FOR APPLICATION PROVISIONING:"
 echo "👉 Node UID: $NODE_UID"
