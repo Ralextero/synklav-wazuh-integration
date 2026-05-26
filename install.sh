@@ -6,9 +6,7 @@ import binascii
 import urllib.parse
 import http.client
 import time
-import re
 import glob
-from datetime import datetime
 
 print("====================================================")
 print(" SYNKLAV HUB SYSTEM INTEGRATION ENGINE              ")
@@ -17,12 +15,10 @@ print("====================================================")
 OSSEC_CONF = "/var/ossec/etc/ossec.conf"
 WORKER_URL = "https://synklav-notification-hub.synklav.workers.dev/"
 
-# Enforce root privileges
 if os.getuid() != 0:
-    print("[ERROR] Security context execution violation: Script must be run as root (sudo).")
+    print("[ERROR] Script must be run as root (sudo).")
     sys.exit(1)
 
-# SYSTEM MODE SELECTION
 print("Select execution profile:")
 print(" 1) INITIALIZE      : Fresh deployment of Synklav core container.")
 print(" 2) ADD USER        : Append a new multi-tenant user profile / node UID.")
@@ -33,33 +29,22 @@ print(" 5) PURGE ALL       : Complete atomic removal of all Synklav structures."
 try:
     exec_profile = int(input("➔ Enter profile selection (1-5): ").strip())
 except ValueError:
-    print("[ERROR] Invalid selection matrix context.")
+    print("[ERROR] Invalid selection.")
     sys.exit(1)
 
 if exec_profile not in [1, 2, 3, 4, 5]:
     print("[ERROR] Out of bounds profile selection.")
     sys.exit(1)
 
-# TIMESTAMPED BACKUP ROUTINE
-timestamp_str = datetime.now().strftime("%Y%m%d%H%M%S")
-backup_conf = f"{OSSEC_CONF}.{timestamp_str}.bak"
-legacy_backup = f"{OSSEC_CONF}.bak"
-
-if os.path.exists(OSSEC_CONF):
-    try:
-        import shutil
-        shutil.copyfile(OSSEC_CONF, backup_conf)
-        shutil.copyfile(OSSEC_CONF, legacy_backup)
-    except Exception as e:
-        print(f"[ERROR] Failed to create security backup: {e}")
-        sys.exit(1)
-else:
-    print("[ERROR] Target ossec.conf file not found.")
+if not os.path.exists(OSSEC_CONF):
+    print("[ERROR] ossec.conf not found.")
     sys.exit(1)
 
-# ------------------------------------------------------------------------------
-# DATA ACQUISITION
-# ------------------------------------------------------------------------------
+import shutil
+try:
+    shutil.copyfile(OSSEC_CONF, f"{OSSEC_CONF}.bak")
+except: pass
+
 node_uid = ""
 recovery_kit = ""
 min_alert_level = "1"
@@ -69,199 +54,179 @@ tg_chat_id = "null"
 
 if exec_profile in [1, 2]:
     node_uid = input("➔ Enter target UNIQUE NODE UID: ").strip()
-    if not node_uid:
-        print("[ERROR] Node UID cannot be empty.")
-        sys.exit(1)
-        
+    if not node_uid: sys.exit(1)
     recovery_kit = input("➔ Enter your 24-word Recovery Kit (single line): ").strip().lower()
-    recovery_kit = " ".join(recovery_kit.split())
-    word_count = len(recovery_kit.split())
-    
-    if word_count != 24:
-        print(f"[ERROR] Mnemonic matrix must equal 24 elements. Detected: {word_count}")
+    if len(recovery_kit.split()) != 24:
+        print("[ERROR] Recovery Kit must be exactly 24 words.")
         sys.exit(1)
-        
     min_alert_level = input("➔ Enter the MINIMUM alert level for Telegram/Push routing (1-15): ").strip()
     
-    is_custom = input("➔ Activate Multi-Tenant / Custom OneSignal routing? (yes/no): ").strip().lower()
-    if is_custom in ['yes', 'y']:
+    if input("➔ Activate Multi-Tenant / Custom OneSignal routing? (yes/no): ").strip().lower() in ['yes', 'y']:
         custom_app_id = input("   - App ID string: ").strip()
         custom_rest_key = input("   - REST API Key string: ").strip()
         
-    is_telegram = input("➔ Active secondary Telegram notification routing? (yes/no): ").strip().lower()
-    if is_telegram in ['yes', 'y']:
+    if input("➔ Active secondary Telegram notification routing? (yes/no): ").strip().lower() in ['yes', 'y']:
         tg_chat_id = input("   - Target Chat ID string: ").strip()
-
 elif exec_profile in [3, 4]:
     node_uid = input("➔ Enter target UNIQUE NODE UID: ").strip()
-    if not node_uid:
-        print("[ERROR] Node UID cannot be empty.")
-        sys.exit(1)
+    if not node_uid: sys.exit(1)
     if exec_profile == 3:
-        min_alert_level = input("➔ Enter the NEW minimum alert level for Telegram (1-15): ").strip()
+        min_alert_level = input("➔ Enter the NEW minimum alert level (1-15): ").strip()
 
-# ------------------------------------------------------------------------------
-# CORE CIPHER GENERATION (BIP39 SIMULATION)
-# ------------------------------------------------------------------------------
-notification_key = "null"
-onesignal_tag_hash = "null"
-
+notification_key, onesignal_tag_hash = "null", "null"
 if exec_profile in [1, 2]:
-    mnemonic_bytes = recovery_kit.encode('utf-8')
-    full_seed = hashlib.pbkdf2_hmac('sha512', mnemonic_bytes, b'mnemonic', 2048, 64)
+    full_seed = hashlib.pbkdf2_hmac('sha512', recovery_kit.encode('utf-8'), b'mnemonic', 2048, 64)
     master_key_hex = binascii.hexlify(full_seed[0:32]).decode('utf-8')
-    
     notification_key = hashlib.sha256((node_uid + master_key_hex).encode('utf-8')).hexdigest()
     onesignal_tag_hash = hashlib.sha256((notification_key + node_uid).encode('utf-8')).hexdigest()
 
+target_name = f"custom-synklav-{node_uid}"
+
 # ------------------------------------------------------------------------------
-# XML CONFIGURATION HANDLING (REGEX BASED - ZERO LOOP STATE ERRORS)
+# MOTOR DE EXTRACCIÓN LÍNEA A LÍNEA (A PRUEBA DE BALAS)
 # ------------------------------------------------------------------------------
 with open(OSSEC_CONF, 'r', encoding='utf-8') as f:
-    output_content = f.read()
+    raw_lines = f.read().splitlines()
 
-# SAFEGUARD 1: Check baseline integrity
-if "<ossec_config>" not in output_content or "</ossec_config>" not in output_content:
-    print("[CRITICAL ERROR] Target ossec.conf is corrupted or missing master <ossec_config> tags.")
-    sys.exit(1)
+clean_lines = []
+in_integration = False
+integration_buffer = []
+is_synklav_integration = False
 
-START_MARK = ""
-END_MARK = ""
-target_integration_name = f"custom-synklav-{node_uid}"
+for line in raw_lines:
+    # 1. Destruimos cualquier basura de las versiones anteriores al instante
+    if "SYNKLAV_START" in line or "SYNKLAV_END" in line:
+        continue
 
-if exec_profile == 5:
-    # PURGE ALL: Removes the entire block and any stray custom-synklav integrations
-    output_content = output_content.replace(START_MARK, "").replace(END_MARK, "")
-    output_content = re.sub(r'[ \t]*<integration>\s*<name>custom-synklav-[^<]+</name>.*?</integration>\n*', '', output_content, flags=re.DOTALL)
+    # 2. Localizamos los bloques de integración de Wazuh
+    if "<integration>" in line:
+        in_integration = True
+        integration_buffer = [line]
+        is_synklav_integration = False
+        continue
     
-    # Remove all physical integration files
-    for f_path in glob.glob('/var/ossec/integrations/custom-synklav*'):
-        try: os.remove(f_path)
-        except: pass
-
-elif exec_profile == 4:
-    # REMOVE SINGLE USER: Extracts only the specific integration node
-    pattern = r'[ \t]*<integration>\s*<name>' + re.escape(target_integration_name) + r'</name>.*?</integration>\n*'
-    output_content = re.sub(pattern, '', output_content, flags=re.DOTALL)
-    
-    try: os.remove(f"/var/ossec/integrations/{target_integration_name}")
-    except: pass
-
-elif exec_profile == 3:
-    # UPDATE TELEGRAM LEVEL IN PLACE
-    if target_integration_name not in output_content:
-        print(f"[ERROR] Node profile for {node_uid} not found in configuration.")
-        sys.exit(1)
+    if in_integration:
+        integration_buffer.append(line)
         
-    pattern = r'([ \t]*<integration>\s*<name>' + re.escape(target_integration_name) + r'</name>.*?)<level>\d+</level>(.*?</integration>)'
-    output_content = re.sub(pattern, r'\g<1><level>' + min_alert_level + r'</level>\g<2>', output_content, flags=re.DOTALL)
+        if exec_profile == 5:
+            # En PURGE ALL, si la integración es de synklav, la marcamos para borrar
+            if "custom-synklav" in line:
+                is_synklav_integration = True
+        elif exec_profile == 4:
+            # En REMOVE USER, solo borramos la de este usuario concreto
+            if target_name in line:
+                is_synklav_integration = True
+        
+        if "</integration>" in line:
+            in_integration = False
+            # Si NO era de synklav, la salvamos y la metemos al archivo limpio
+            if not is_synklav_integration:
+                clean_lines.extend(integration_buffer)
+            integration_buffer = []
+        continue
+    
+    # 3. Guardamos el resto de configuraciones nativas
+    clean_lines.append(line)
+
+# ------------------------------------------------------------------------------
+# APLICAR NUEVOS BLOQUES (INITIALIZE / ADD USER / UPDATE)
+# ------------------------------------------------------------------------------
+if exec_profile == 3:
+    in_target = False
+    found = False
+    for i, line in enumerate(clean_lines):
+        if "<integration>" in line: in_target = False
+        if target_name in line: 
+            in_target = True
+            found = True
+        if in_target and "<level>" in line:
+            clean_lines[i] = f"    <level>{min_alert_level}</level>"
+        if "</integration>" in line: in_target = False
+    if not found:
+        print(f"[ERROR] Node {node_uid} not found.")
+        sys.exit(1)
 
 elif exec_profile == 1:
-    # INITIALIZE: Creates the isolated zone and registers the first node
-    if START_MARK in output_content:
-        print("[ERROR] System already initialized. Use profile 2 (ADD USER) to register additional nodes.")
+    if any("custom-synklav" in l for l in clean_lines):
+        print("[ERROR] System already initialized with Synklav nodes. Use profile 2 (ADD USER).")
         sys.exit(1)
-        
-    new_block = f"\n  {START_MARK}\n  <integration>\n    <name>{target_integration_name}</name>\n    <level>{min_alert_level}</level>\n    <alert_format>json</alert_format>\n  </integration>\n  {END_MARK}\n"
-    output_content = output_content.replace("</ossec_config>", f"{new_block}</ossec_config>")
+    
+    idx = -1
+    for i, l in enumerate(clean_lines):
+        if "</ossec_config>" in l: idx = i
+    
+    if idx == -1:
+        print("[CRITICAL ERROR] </ossec_config> not found!")
+        sys.exit(1)
+    
+    new_block = ["  <integration>", f"    <name>{target_name}</name>", f"    <level>{min_alert_level}</level>", "    <alert_format>json</alert_format>", "  </integration>"]
+    clean_lines = clean_lines[:idx] + new_block + clean_lines[idx:]
 
 elif exec_profile == 2:
-    # ADD USER: Injects a new node precisely inside the existing isolated zone
-    if START_MARK not in output_content:
-        print("[ERROR] Synklav core missing. Run profile 1 (INITIALIZE) first.")
-        sys.exit(1)
-        
-    if target_integration_name in output_content:
-        print(f"[WARNING] Node {node_uid} already exists. Overwriting handler script only.")
+    if any(target_name in l for l in clean_lines):
+        print(f"[WARNING] Node {node_uid} already exists. Overwriting script only.")
     else:
-        new_integration = f"  <integration>\n    <name>{target_integration_name}</name>\n    <level>{min_alert_level}</level>\n    <alert_format>json</alert_format>\n  </integration>\n  {END_MARK}"
-        output_content = output_content.replace(END_MARK, new_integration)
+        idx = -1
+        for i, l in enumerate(clean_lines):
+            if "</ossec_config>" in l: idx = i
+        
+        if idx == -1:
+            print("[CRITICAL ERROR] </ossec_config> not found!")
+            sys.exit(1)
+        
+        new_block = ["  <integration>", f"    <name>{target_name}</name>", f"    <level>{min_alert_level}</level>", "    <alert_format>json</alert_format>", "  </integration>"]
+        clean_lines = clean_lines[:idx] + new_block + clean_lines[idx:]
 
 # ------------------------------------------------------------------------------
-# ATOMIC SAVE GUARDRAIL
+# ESCRITURA EN DISCO Y SCRIPT HANDLER
 # ------------------------------------------------------------------------------
-if "<ossec_config>" not in output_content or "</ossec_config>" not in output_content:
-    print("[CRITICAL ERROR] Guardrail triggered: Prevented writing an anomalous layout. XML root tags lost.")
+final_content = "\n".join(clean_lines) + "\n"
+if "<ossec_config>" not in final_content or "</ossec_config>" not in final_content:
+    print("[CRITICAL ERROR] Final structure invalid.")
     sys.exit(1)
 
 tmp_path = OSSEC_CONF + ".tmp"
 with open(tmp_path, 'w', encoding='utf-8') as f:
-    f.write(output_content)
+    f.write(final_content)
 os.replace(tmp_path, OSSEC_CONF)
 
-# ------------------------------------------------------------------------------
-# WRITE EXECUTABLE SCRIPT HANDLER (PROFILES 1 & 2)
-# ------------------------------------------------------------------------------
+if exec_profile == 5:
+    for f_path in glob.glob('/var/ossec/integrations/custom-synklav*'):
+        try: os.remove(f_path)
+        except: pass
+elif exec_profile == 4:
+    try: os.remove(f"/var/ossec/integrations/{target_name}")
+    except: pass
+
 if exec_profile in [1, 2]:
-    script_path = f"/var/ossec/integrations/{target_integration_name}"
-    
     script_code = f"""#!/usr/bin/python3
 import sys, json, http.client, urllib.parse, hmac, hashlib, time
-
-alert_file = sys.argv[1]
-with open(alert_file, 'r') as f:
-    alert_json = f.read()
-
-NODE_UID = "{node_uid}"
-WORKER_URL = "{WORKER_URL}"
-NOTIFICATION_KEY = "{notification_key}"
-TAG_HASH = "{onesignal_tag_hash}"
-TG_CHAT_ID = "{tg_chat_id}"
-CUSTOM_APP_ID = "{custom_app_id}"
-CUSTOM_REST_KEY = "{custom_rest_key}"
-
-parsed_url = urllib.parse.urlparse(WORKER_URL)
-host = parsed_url.netloc
-path = parsed_url.path if parsed_url.path else "/"
-
-timestamp = str(int(time.time()))
-message = (alert_json + timestamp + NODE_UID).encode('utf-8')
-signature = hmac.new(bytes.fromhex(NOTIFICATION_KEY), message, hashlib.sha256).hexdigest()
-
-headers = {{
-    "Content-Type": "application/json",
-    "X-Synklav-Signature": signature,
-    "X-Synklav-Timestamp": timestamp,
-    "X-Synklav-Node-UID": NODE_UID,
-    "X-Synklav-Notification-Key": NOTIFICATION_KEY,
-    "X-Synklav-Tag-Hash": TAG_HASH,
-    "X-Synklav-Telegram-Chat-ID": TG_CHAT_ID if TG_CHAT_ID else "null",
-    "X-Synklav-Custom-App-ID": CUSTOM_APP_ID if CUSTOM_APP_ID else "null",
-    "X-Synklav-Custom-REST-Key": CUSTOM_REST_KEY if CUSTOM_REST_KEY else "null"
-}}
-
+with open(sys.argv[1], 'r') as f: alert_json = f.read()
+NODE_UID, NOTIFICATION_KEY, TAG_HASH, TG_CHAT_ID = "{node_uid}", "{notification_key}", "{onesignal_tag_hash}", "{tg_chat_id}"
+CUSTOM_APP_ID, CUSTOM_REST_KEY = "{custom_app_id}", "{custom_rest_key}"
+parsed = urllib.parse.urlparse("{WORKER_URL}")
+ts = str(int(time.time()))
+sig = hmac.new(bytes.fromhex(NOTIFICATION_KEY), (alert_json + ts + NODE_UID).encode('utf-8'), hashlib.sha256).hexdigest()
+headers = {{"Content-Type": "application/json", "X-Synklav-Signature": sig, "X-Synklav-Timestamp": ts, "X-Synklav-Node-UID": NODE_UID, "X-Synklav-Notification-Key": NOTIFICATION_KEY, "X-Synklav-Tag-Hash": TAG_HASH, "X-Synklav-Telegram-Chat-ID": TG_CHAT_ID, "X-Synklav-Custom-App-ID": CUSTOM_APP_ID, "X-Synklav-Custom-REST-Key": CUSTOM_REST_KEY}}
 try:
-    conn = http.client.HTTPSConnection(host, timeout=10)
-    conn.request("POST", path, body=alert_json, headers=headers)
-    response = conn.getresponse()
+    conn = http.client.HTTPSConnection(parsed.netloc, timeout=10)
+    conn.request("POST", parsed.path if parsed.path else "/", body=alert_json, headers=headers)
+    conn.getresponse()
     conn.close()
-except:
-    sys.exit(0)
+except: sys.exit(0)
 """
-    with open(script_path, 'w', encoding='utf-8') as sf:
-        sf.write(script_code)
-        
-    os.chmod(script_path, 0o750)
+    sp = f"/var/ossec/integrations/{target_name}"
+    with open(sp, 'w', encoding='utf-8') as sf: sf.write(script_code)
+    os.chmod(sp, 0o750)
     try:
         import pwd, grp
-        uid = pwd.getpwnam('root').pw_uid
-        gid = grp.getgrnam('wazuh').gr_gid
-        os.chown(script_path, uid, gid)
+        os.chown(sp, pwd.getpwnam('root').pw_uid, grp.getgrnam('wazuh').gr_gid)
     except: pass
 
 print("[STATUS] Hot-rebooting Wazuh engine process core...")
 os.system("/var/ossec/bin/wazuh-control restart")
 
 if exec_profile in [1, 2]:
-    print("====================================================")
-    print("✅ OPERATION VERIFIED AND ACTIVE")
-    print("====================================================")
-    print("⚠️  METRIC SUMMARY FOR APPLICATION PROVISIONING:")
-    print(f"👉 Node UID: {node_uid}")
-    print(f"👉 OneSignal Tag Hash: {onesignal_tag_hash}")
-    print(f"👉 Notification Key: {notification_key}")
-    print("====================================================")
+    print("====================================================\n✅ OPERATION VERIFIED AND ACTIVE\n====================================================\n⚠️  METRIC SUMMARY FOR APPLICATION PROVISIONING:\n👉 Node UID: " + node_uid + "\n👉 OneSignal Tag Hash: " + onesignal_tag_hash + "\n👉 Notification Key: " + notification_key + "\n====================================================")
 else:
-    print("====================================================")
-    print(" 🔥 OPERATION COMPLETE: CLEAN EXIT CODE 0")
-    print("====================================================")
+    print("====================================================\n 🔥 OPERATION COMPLETE: CLEAN EXIT CODE 0\n====================================================")
