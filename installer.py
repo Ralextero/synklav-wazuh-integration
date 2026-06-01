@@ -86,8 +86,8 @@ tg_chat_id = "null"
 tg_min_level = "1"
 
 def validate_node_uid(uid):
-    if not re.match(r'^[a-zA-Z0-9]+$', uid):
-        print("[CRITICAL] Invalid Node UID. Only alphanumeric characters allowed.")
+    if not re.match(r'^[a-zA-Z0-9_-]+$', uid):
+        print("[CRITICAL] Invalid Node UID. Only alphanumeric, hyphens and underscores allowed.")
         sys.exit(1)
     return uid
 
