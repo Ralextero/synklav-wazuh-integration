@@ -265,11 +265,12 @@ except: sys.exit(0)
 # REINICIO Y PROTECCIÓN DE ROLLBACK TOTAL
 # ------------------------------------------------------------------------------
 print("[STATUS] Hot-rebooting Wazuh engine process core...")
-restart_result = subprocess.run(["/var/ossec/bin/wazuh-control", "restart"], capture_output=True, text=True)
 
-if restart_result.returncode != 0:
+# Usamos os.system para evitar el deadlock de pipes heredados de los demonios
+restart_result = os.system("/var/ossec/bin/wazuh-control restart")
+
+if restart_result != 0:
     print("[CRITICAL] Wazuh core failed to restart. The ossec.conf might be corrupted.")
-    print(restart_result.stderr)
     print(f"[STATUS] INITIATING AUTOMATIC TOTAL ROLLBACK to {backup_path}...")
     
     # 1. Restaura la configuración XML
@@ -281,13 +282,13 @@ if restart_result.returncode != 0:
             f.write(content)
         os.chmod(f_path, 0o750)
     
-    # 3. Limpia el rastro de la integración fallida si intentábamos instalar
+    # 3. Limpia el rastro de la integración fallida
     if exec_profile in [1, 2]:
         try: os.remove(f"/var/ossec/integrations/{target_name}")
         except: pass
 
-    rollback_result = subprocess.run(["/var/ossec/bin/wazuh-control", "restart"], capture_output=True, text=True)
-    if rollback_result.returncode == 0:
+    rollback_result = os.system("/var/ossec/bin/wazuh-control restart")
+    if rollback_result == 0:
         print("[STATUS] Rollback successful. Server is safely running the previous configuration.")
     else:
         print("[CRITICAL] Rollback failed. Manual intervention required.")
