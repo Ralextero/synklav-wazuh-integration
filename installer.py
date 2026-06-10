@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-#  SYNKLAV HUB SYSTEM INTEGRATION ENGINE (FCM) v6.0 (Production Release)
+#  SYNKLAV HUB SYSTEM INTEGRATION ENGINE (FCM) v7.0 (Enterprise Standard)
 #  Wazuh -> Cloudflare Worker -> Firebase/Telegram push notification bridge
 #
 #  Architecture Decision Records (ADR):
@@ -13,6 +13,9 @@
 #  [A4] .creds file privileges: 0o640 root:wazuh_gid
 #  [A5] The integration script always exits with sys.exit(0) on any error.
 #       Errors are safely written to sys.stderr for administrative debugging.
+#  [A6] Backups are strictly transactional. If the operation succeeds and 
+#       Wazuh restarts successfully, the ephemeral backup is purged to prevent
+#       state drift and filesystem clutter.
 # =============================================================================
 
 import os
@@ -41,7 +44,7 @@ MIN_ALERT_LEVEL  = 3
 
 BANNER = """\
 ====================================================
- SYNKLAV HUB SYSTEM INTEGRATION ENGINE (FCM) v6.0
+ SYNKLAV HUB SYSTEM INTEGRATION ENGINE (FCM) v7.0
 ===================================================="""
 
 # =============================================================================
@@ -189,7 +192,7 @@ def make_backup() -> str:
     try:
         shutil.copyfile(OSSEC_CONF, backup)
         os.chmod(backup, 0o600)
-        log(f"[STATUS] OSSEC configuration backup created at: {backup}")
+        log(f"[STATUS] Ephemeral OSSEC backup created at: {backup}")
         return backup
     except OSError as exc:
         die(f"Failed to create configuration backup: {exc}")
@@ -198,7 +201,7 @@ def purge_backups() -> None:
     for bak in glob.glob(f"{OSSEC_CONF}.synklav-*.bak"):
         try:
             os.unlink(bak)
-            log(f"[STATUS] Backup removed: {bak}")
+            log(f"[STATUS] Ephemeral backup removed cleanly: {bak}")
         except OSError:
             pass
 
@@ -210,7 +213,7 @@ def generate_integration_script(uid: str) -> str:
     safe_worker_url = WORKER_URL
     return f'''#!/usr/bin/env python3
 # Synklav Wazuh integration script — node: {uid}
-# DO NOT EDIT MANUALLY. Managed by synklav_installer.py v6.0
+# DO NOT EDIT MANUALLY. Managed by synklav_installer.py v7.0
 
 import sys, json, hmac, hashlib, http.client, urllib.parse, time
 
@@ -381,7 +384,7 @@ def profile_init_or_add(uid: str, notification_key: str, tg_chat_id: str, tg_min
     backup      = make_backup()
     rollback.register(lambda: shutil.copyfile(backup, OSSEC_CONF))
 
-    # Deterministic Derivation matching Flutter client output strictly: SHA256(notification_key + uid)
+    # Deterministic Derivation matching Flutter client output
     fcmTopicHash = hashlib.sha256((notification_key + uid).encode("utf-8")).hexdigest()
 
     creds = {
@@ -408,6 +411,7 @@ def profile_init_or_add(uid: str, notification_key: str, tg_chat_id: str, tg_min
         restart_wazuh()
         sys.exit(1)
     
+    purge_backups()
     log(f"[OK] Node '{uid}' successfully integrated and active.")
 
 def profile_update_telegram(uid: str, new_tg_chat_id: str | None, new_tg_level: str) -> None:
@@ -474,8 +478,7 @@ def profile_remove_user(uid: str) -> None:
         restart_wazuh()
         sys.exit(1)
 
-    try: os.unlink(backup)
-    except OSError: pass
+    purge_backups()
     log(f"[OK] Node '{uid}' successfully removed.")
 
 def profile_purge() -> None:
@@ -546,9 +549,7 @@ def profile_purge() -> None:
         sys.exit(1)
 
     purge_backups()
-    try: os.unlink(backup)
-    except OSError: pass
-    log("[OK] Complete purge. All Synklav artifacts have been removed.")
+    log("[OK] Complete purge. All Synklav artifacts have been removed cleanly.")
 
 # =============================================================================
 #  MAIN ENTRY POINT & ARGPARSE
@@ -567,7 +568,7 @@ def main() -> None:
     acquire_lock()
 
     parser = argparse.ArgumentParser(
-        description="Synklav Integration Installer v6.0",
+        description="Synklav Integration Installer v7.0",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("--profile", type=int, choices=[1, 2, 3, 4, 5],
